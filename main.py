@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -58,8 +59,46 @@ def load_documents_from_files(file_paths: list[str]) -> list[Document]:
 
 def demo_llm(prompt: str) -> str:
     """A simple mock LLM for manual RAG testing."""
-    preview = prompt[:400].replace("\n", " ")
-    return f"[DEMO LLM] Generated answer from prompt preview: {preview}..."
+    question_match = re.search(r"Question:\s*(.+?)\s*Answer:\s*$", prompt, flags=re.DOTALL)
+    context_match = re.search(r"Context:\n(.*?)\n\nQuestion:", prompt, flags=re.DOTALL)
+
+    question = question_match.group(1).strip() if question_match else ""
+    context_block = context_match.group(1).strip() if context_match else ""
+
+    if not context_block or context_block == "No relevant context was retrieved from the knowledge base.":
+        return "[DEMO LLM] I could not answer because no relevant context was retrieved."
+
+    cleaned_context = re.sub(r"\[Chunk[^\]]+\]\s*", "", context_block)
+    candidate_sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", cleaned_context.replace("\n", " "))
+        if sentence.strip()
+    ]
+
+    question_terms = {
+        term
+        for term in re.findall(r"[a-zA-Z]{3,}", question.lower())
+        if term not in {"what", "when", "where", "which", "with", "from", "that", "this", "have"}
+    }
+
+    def score_sentence(sentence: str) -> tuple[int, int]:
+        sentence_terms = set(re.findall(r"[a-zA-Z]{3,}", sentence.lower()))
+        overlap = len(question_terms & sentence_terms)
+        return (overlap, len(sentence))
+
+    ranked_sentences = sorted(candidate_sentences, key=score_sentence, reverse=True)
+    selected_sentences: list[str] = []
+    for sentence in ranked_sentences:
+        if sentence not in selected_sentences:
+            selected_sentences.append(sentence)
+        if len(selected_sentences) == 3:
+            break
+
+    if not selected_sentences:
+        selected_sentences = candidate_sentences[:2]
+
+    answer = " ".join(selected_sentences)
+    return f"[DEMO LLM] Answer based on retrieved context: {answer}"
 
 
 def run_manual_demo(question: str | None = None, sample_files: list[str] | None = None) -> int:
